@@ -1,5 +1,5 @@
 # ff
-tiny HTTP file-sharing tool
+Tiny HTTP file-sharing tool
 
 ####Install:
 `go get github.com/c4pt0r/ff`
