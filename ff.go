@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,8 +101,36 @@ func getFileMeta(key string) (*FileMeta, bool) {
 	return &meta, true
 }
 
-func doGet(w http.ResponseWriter, key string) {
-	if meta, ok := getFileMeta(key); ok {
+func doGet(w http.ResponseWriter, r *http.Request, key string) {
+	if len(key) == 0 {
+		// GET /f
+		r.ParseForm()
+		var files []FileMeta
+		var err error
+		offset, limit := 0, 50
+		if v := r.FormValue("offset"); len(v) > 0 {
+			offset, err = strconv.Atoi(v)
+		}
+		if v := r.FormValue("n"); len(v) > 0 {
+			limit, err = strconv.Atoi(v)
+		}
+		if err != nil {
+			errResponse(w, err)
+			return
+		}
+
+		// get file metas
+		db.Order("create_at DESC").Offset(offset).Limit(limit).Find(&files)
+		// write file list
+		b, err := json.MarshalIndent(files, "", "  ")
+		if err != nil {
+			errResponse(w, err)
+			return
+		}
+		w.Write(b)
+
+	} else if meta, ok := getFileMeta(key); ok {
+		// GET /f/{key}
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
 		fn := path.Join(*workingDir, meta.Key)
 		fp, err := os.Open(fn)
@@ -169,18 +199,17 @@ func doPut(w http.ResponseWriter, r *http.Request, key string) {
 
 func fileHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	key := genKey(vars["key"])
-	log.Debug("request key:", key)
+	key := vars["key"]
 
 	switch r.Method {
 	case "GET":
-		doGet(w, key)
+		doGet(w, r, key)
 	case "DELETE":
 		doDelete(w, key)
 	case "POST":
 		fallthrough
 	case "PUT":
-		doPut(w, r, key)
+		doPut(w, r, genKey(key))
 	default:
 		w.WriteHeader(500)
 		w.Write([]byte("invalid request"))
