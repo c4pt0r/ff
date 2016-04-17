@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"path"
@@ -21,7 +22,7 @@ import (
 var (
 	workingDir = flag.String("dir", "", "file dir")
 	addr       = flag.String("addr", "0.0.0.0:8080", "listen addr")
-	serverName = flag.String("serverName", "", "server name, e.g. www.foo.com")
+	logLevel   = flag.String("L", "error", "log level")
 )
 
 var (
@@ -68,8 +69,12 @@ func bootstrap(dir string) error {
 	return nil
 }
 
+func isValidKey(key string) bool {
+	return !strings.HasPrefix(key, ".")
+}
+
 func genKey(providedKey string) string {
-	if len(providedKey) != 0 {
+	if len(providedKey) != 0 && isValidKey(providedKey) {
 		return providedKey
 	}
 	return randString(5)
@@ -182,9 +187,6 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func putHandler(w http.ResponseWriter, r *http.Request) {
-}
-
 // http file server
 func serve(addr string) error {
 	r := mux.NewRouter()
@@ -195,6 +197,7 @@ func serve(addr string) error {
 
 func main() {
 	flag.Parse()
+	log.SetLevelByString(*logLevel)
 	// check workingDir is valid
 	if len(*workingDir) == 0 {
 		log.Fatal("invalid working dir")
