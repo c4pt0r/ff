@@ -101,43 +101,48 @@ func getFileMeta(key string) (*FileMeta, bool) {
 	return &meta, true
 }
 
+func doList(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	var files []FileMeta
+	var err error
+	offset, limit := 0, 50
+	if v := r.FormValue("offset"); len(v) > 0 {
+		offset, err = strconv.Atoi(v)
+	}
+	if v := r.FormValue("n"); len(v) > 0 {
+		limit, err = strconv.Atoi(v)
+	}
+	if err != nil {
+		errResponse(w, err)
+		return
+	}
+	// get file metas
+	db.Order("create_at DESC").Offset(offset).Limit(limit).Find(&files)
+	// write file list
+	b, err := json.MarshalIndent(files, "", "  ")
+	if err != nil {
+		errResponse(w, err)
+		return
+	}
+	w.Write(b)
+}
+
 func doGet(w http.ResponseWriter, r *http.Request, key string) {
 	if len(key) == 0 {
-		// GET /f
-		r.ParseForm()
-		var files []FileMeta
-		var err error
-		offset, limit := 0, 50
-		if v := r.FormValue("offset"); len(v) > 0 {
-			offset, err = strconv.Atoi(v)
-		}
-		if v := r.FormValue("n"); len(v) > 0 {
-			limit, err = strconv.Atoi(v)
-		}
-		if err != nil {
-			errResponse(w, err)
-			return
-		}
-
-		// get file metas
-		db.Order("create_at DESC").Offset(offset).Limit(limit).Find(&files)
-		// write file list
-		b, err := json.MarshalIndent(files, "", "  ")
-		if err != nil {
-			errResponse(w, err)
-			return
-		}
-		w.Write(b)
-
+		doList(w, r)
+		return
 	} else if meta, ok := getFileMeta(key); ok {
 		// GET /f/{key}
+		// set content-length
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
 		fn := path.Join(*workingDir, meta.Key)
+		// read file
 		fp, err := os.Open(fn)
 		if err != nil {
 			errResponse(w, err)
 			return
 		}
+		defer fp.Close()
 		_, err = io.Copy(w, fp)
 		if err != nil {
 			errResponse(w, err)
@@ -164,7 +169,8 @@ func doDelete(w http.ResponseWriter, key string) {
 
 func doPut(w http.ResponseWriter, r *http.Request, key string) {
 	// check if file already exists
-	if fileMetaExists(key) {
+	log.Info(r.FormValue("force"))
+	if fileMetaExists(key) && r.FormValue("force") != "true" {
 		errResponse(w, ErrFileAlreadyExists)
 		return
 	}
@@ -184,14 +190,24 @@ func doPut(w http.ResponseWriter, r *http.Request, key string) {
 	}
 
 	// write file meta
-	if errs := db.Save(&FileMeta{
+	m := &FileMeta{
 		Key:      key,
 		FileName: key,
 		Size:     n,
 		CreateAt: time.Now(),
-	}).GetErrors(); len(errs) != 0 {
-		errResponse(w, errs[0])
-		return
+	}
+	if errs := db.Save(m).GetErrors(); len(errs) != 0 {
+		// retry, when using force flag
+		if r.FormValue("force") == "true" {
+			errs = db.Find(&FileMeta{}, "key = ?", key).Update(m).GetErrors()
+			if len(errs) != 0 {
+				errResponse(w, errs[0])
+				return
+			}
+		} else {
+			errResponse(w, errs[0])
+			return
+		}
 	}
 
 	w.Write([]byte("/f/" + key))
