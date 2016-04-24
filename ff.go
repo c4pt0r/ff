@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"path"
@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	workingDir = flag.String("dir", "", "file dir")
+	workingDir = flag.String("dir", ".", "file dir")
 	addr       = flag.String("addr", "0.0.0.0:8080", "listen addr")
 	logLevel   = flag.String("L", "error", "log level")
 )
@@ -36,6 +36,22 @@ var (
 	ErrFileAlreadyExists = errors.New("file alread exists")
 	ErrDBError           = errors.New("DB Error")
 )
+
+var listHtmlTpl = `
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="UTF-8">
+	</head>
+	<body>
+		<h1> Files </h1>
+		<hr/>
+		{{range .}}
+		<div><a href="/f/{{ .Key }}">/f/{{ .Key }}</a> {{ .Size }} {{ .CreateAt.Format "2006-01-02 15:04:05" }}</div>
+		{{end}}
+	</body>
+</html>
+`
 
 // File Meta
 type FileMeta struct {
@@ -118,13 +134,11 @@ func doList(w http.ResponseWriter, r *http.Request) {
 	}
 	// get file metas
 	db.Order("create_at DESC").Offset(offset).Limit(limit).Find(&files)
-	// write file list
-	b, err := json.MarshalIndent(files, "", "  ")
+	t, err := template.New("listPage").Parse(listHtmlTpl)
 	if err != nil {
-		errResponse(w, err)
-		return
+		log.Fatal(err)
 	}
-	w.Write(b)
+	t.Execute(w, files)
 }
 
 func doGet(w http.ResponseWriter, r *http.Request, key string) {
@@ -169,8 +183,9 @@ func doDelete(w http.ResponseWriter, key string) {
 
 func doPut(w http.ResponseWriter, r *http.Request, key string) {
 	// check if file already exists
-	log.Info(r.FormValue("force"))
-	if fileMetaExists(key) && r.FormValue("force") != "true" {
+	// TODO let 'force' became a flag.
+	force := true
+	if fileMetaExists(key) && !force {
 		errResponse(w, ErrFileAlreadyExists)
 		return
 	}
@@ -196,9 +211,10 @@ func doPut(w http.ResponseWriter, r *http.Request, key string) {
 		Size:     n,
 		CreateAt: time.Now(),
 	}
+
 	if errs := db.Save(m).GetErrors(); len(errs) != 0 {
-		// retry, when using force flag
-		if r.FormValue("force") == "true" {
+		// error occurs, retry when force flag is set.
+		if force {
 			errs = db.Find(&FileMeta{}, "key = ?", key).Update(m).GetErrors()
 			if len(errs) != 0 {
 				errResponse(w, errs[0])
