@@ -172,6 +172,12 @@ func doDelete(w http.ResponseWriter, key string) {
 		errResponse(w, ErrNoSuchFile)
 		return
 	}
+	// delete meta
+	errs := db.Delete(&FileMeta{}, "key = ?", key).GetErrors()
+	if len(errs) != 0 {
+		log.Info(errs)
+	}
+	// delete file
 	fn := path.Join(*workingDir, key)
 	err := os.Remove(fn)
 	if err != nil {
