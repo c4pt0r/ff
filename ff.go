@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -22,6 +23,7 @@ import (
 )
 
 var (
+	buildIndex = flag.Bool("build-index", false, "rebuild index for local file(s)")
 	workingDir = flag.String("dir", ".", "file dir")
 	addr       = flag.String("addr", "0.0.0.0:8080", "listen addr")
 	logLevel   = flag.String("L", "error", "log level")
@@ -42,13 +44,36 @@ var listHtmlTpl = `
 <html>
 	<head>
 		<meta charset="UTF-8">
+		<link rel="stylesheet" href="https://milligram.github.io/css/milligram.min.css" />
 	</head>
 	<body>
-		<h1> Files </h1>
-		<hr/>
-		{{range .}}
-		<div><a href="/f/{{ .Key }}">/f/{{ .Key }}</a> {{ .Size }} {{ .CreateAt.Format "2006-01-02 15:04:05" }}</div>
-		{{end}}
+		<div class="container">
+			<h1> Files </h1>
+			<table>
+			  <thead>
+				<tr>
+				  <th>File Link</th>
+				  <th>Size</th>
+				  <th>Create at</th>
+				  <th>Last access</th>
+				  <th>Download count</th>
+				  <th></th>
+				</tr>
+			  </thead>
+			  <tbody>
+				{{range .}}
+				<tr>
+				  <td><a href="/f/{{ .Key }}">/f/{{ .Key }}</a></td>
+				  <td>{{ .Size }}</td>
+				  <td>{{ .CreateAt.Format "2006-01-02 15:04:05" }}</td>
+				  <td>{{ .LastAccess.Format "2006-01-02 15:04:05" }}</td>
+				  <td>{{ .DownloadCnt }}</td>
+				  <td><button class="button button-outline">Delete</button></td>
+				</tr>
+				{{end}}
+			  </tbody>
+			</table>
+		</div>
 	</body>
 </html>
 `
@@ -56,10 +81,12 @@ var listHtmlTpl = `
 // File Meta
 type FileMeta struct {
 	gorm.Model
-	Key      string `gorm:"unique_index"`
-	FileName string
-	CreateAt time.Time `gorm:"index:create_at"`
-	Size     int64
+	Key         string `gorm:"unique_index"`
+	FileName    string
+	CreateAt    time.Time `gorm:"index:create_at"`
+	LastAccess  time.Time
+	DownloadCnt int64
+	Size        int64
 }
 
 func init() {
@@ -78,12 +105,46 @@ func randString(n int) string {
 // open DB
 // TODO use another type of database
 func bootstrap(dir string) error {
+	log.Info("bootstraping")
 	var err error
 	db, err = gorm.Open("sqlite3", path.Join(dir, ".ff.db"))
 	if err != nil {
 		return err
 	}
 	db.CreateTable(&FileMeta{})
+	return nil
+}
+
+func builIndexForFile(key, filepath string) error {
+	if db == nil {
+		bootstrap(*workingDir)
+	}
+	f, err := os.Open(filepath)
+	if err != nil {
+		return err
+	}
+
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	// write file meta
+	m := &FileMeta{
+		Key:         key,
+		FileName:    key,
+		Size:        fi.Size(),
+		CreateAt:    time.Now(),
+		LastAccess:  time.Now(),
+		DownloadCnt: 0,
+	}
+	if errs := db.Save(m).GetErrors(); len(errs) != 0 {
+		// error occurs, retry when force flag is set.
+		errs = db.Find(&FileMeta{}, "key = ?", key).Update(m).GetErrors()
+		if len(errs) != 0 {
+			return errs[0]
+		}
+	}
 	return nil
 }
 
@@ -162,6 +223,10 @@ func doGet(w http.ResponseWriter, r *http.Request, key string) {
 			errResponse(w, err)
 			return
 		}
+		// update last access and download count
+		db.Find(&meta, "key = ?", key).
+			UpdateColumn("download_cnt", gorm.Expr("download_cnt + 1")).
+			UpdateColumn("last_access", time.Now())
 	} else {
 		w.WriteHeader(404)
 	}
@@ -203,35 +268,18 @@ func doPut(w http.ResponseWriter, r *http.Request, key string) {
 		return
 	}
 	defer fp.Close()
-	n, err := io.Copy(fp, r.Body)
+	_, err = io.Copy(fp, r.Body)
 	if err != nil {
 		os.Remove(fn)
 		errResponse(w, err)
 		return
 	}
-
-	// write file meta
-	m := &FileMeta{
-		Key:      key,
-		FileName: key,
-		Size:     n,
-		CreateAt: time.Now(),
+	// build index for this file
+	err = builIndexForFile(key, fn)
+	if err != nil {
+		errResponse(w, err)
+		return
 	}
-
-	if errs := db.Save(m).GetErrors(); len(errs) != 0 {
-		// error occurs, retry when force flag is set.
-		if force {
-			errs = db.Find(&FileMeta{}, "key = ?", key).Update(m).GetErrors()
-			if len(errs) != 0 {
-				errResponse(w, errs[0])
-				return
-			}
-		} else {
-			errResponse(w, errs[0])
-			return
-		}
-	}
-
 	w.Write([]byte("/f/" + key))
 }
 
@@ -265,6 +313,25 @@ func serve(addr string) error {
 func main() {
 	flag.Parse()
 	log.SetLevelByString(*logLevel)
+
+	// if we're rebuilding index
+	if *buildIndex {
+		// skip execute filename
+		args := os.Args[1:]
+		for _, v := range args {
+			// skip flag itself
+			if v == "-build-index" {
+				continue
+			}
+			key := filepath.Base(v)
+			fmt.Println("rebuilding index for:", key, v)
+			if err := builIndexForFile(key, v); err != nil {
+				log.Fatal(err)
+			}
+		}
+		return
+	}
+
 	// check workingDir is valid
 	if len(*workingDir) == 0 {
 		log.Fatal("invalid working dir")
