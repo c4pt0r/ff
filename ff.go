@@ -23,10 +23,11 @@ import (
 )
 
 var (
-	buildIndex = flag.Bool("build-index", false, "rebuild index for local file(s)")
-	workingDir = flag.String("dir", ".", "file dir")
-	addr       = flag.String("addr", "0.0.0.0:8080", "listen addr")
-	logLevel   = flag.String("L", "error", "log level")
+	buildIndexFlag = flag.Bool("build-index", false, "rebuild index for local file(s)")
+	rmFlag         = flag.Bool("rm", false, "remove specified file and index")
+	workingDir     = flag.String("dir", ".", "file dir")
+	addr           = flag.String("addr", "0.0.0.0:8080", "listen addr")
+	logLevel       = flag.String("L", "error", "log level")
 )
 
 var (
@@ -116,9 +117,6 @@ func bootstrap(dir string) error {
 }
 
 func builIndexForFile(key, filepath string) error {
-	if db == nil {
-		bootstrap(*workingDir)
-	}
 	f, err := os.Open(filepath)
 	if err != nil {
 		return err
@@ -144,6 +142,22 @@ func builIndexForFile(key, filepath string) error {
 		if len(errs) != 0 {
 			return errs[0]
 		}
+	}
+	return nil
+}
+
+// remove file and index
+func removeFileAndIndex(key string) error {
+	errs := db.Unscoped().Delete(&FileMeta{}, "key = ?", key).GetErrors()
+	if len(errs) != 0 {
+		// ignore index
+		log.Error(errs)
+	}
+	// delete file
+	fn := path.Join(*workingDir, key)
+	err := os.Remove(fn)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -237,14 +251,7 @@ func doDelete(w http.ResponseWriter, key string) {
 		errResponse(w, ErrNoSuchFile)
 		return
 	}
-	// delete meta
-	errs := db.Delete(&FileMeta{}, "key = ?", key).GetErrors()
-	if len(errs) != 0 {
-		log.Info(errs)
-	}
-	// delete file
-	fn := path.Join(*workingDir, key)
-	err := os.Remove(fn)
+	err := removeFileAndIndex(key)
 	if err != nil {
 		errResponse(w, err)
 		return
@@ -310,27 +317,24 @@ func serve(addr string) error {
 	return http.ListenAndServe(addr, r)
 }
 
+func loopArgs(flg string, fn func(v string)) {
+	args := os.Args[1:]
+	found := false
+	for _, v := range args {
+		if v == flg {
+			found = true
+			continue
+		}
+		if found {
+			fn(v)
+		}
+	}
+
+}
+
 func main() {
 	flag.Parse()
 	log.SetLevelByString(*logLevel)
-
-	// if we're rebuilding index
-	if *buildIndex {
-		// skip execute filename
-		args := os.Args[1:]
-		for _, v := range args {
-			// skip flag itself
-			if v == "-build-index" {
-				continue
-			}
-			key := filepath.Base(v)
-			fmt.Println("rebuilding index for:", key, v)
-			if err := builIndexForFile(key, v); err != nil {
-				log.Fatal(err)
-			}
-		}
-		return
-	}
 
 	// check workingDir is valid
 	if len(*workingDir) == 0 {
@@ -346,6 +350,30 @@ func main() {
 	// bootstrap
 	if err := bootstrap(*workingDir); err != nil {
 		log.Fatal(err)
+	}
+
+	// if we're just rebuilding index
+	if *buildIndexFlag {
+		// skip execute filename
+		loopArgs("-build-index", func(v string) {
+			key := filepath.Base(v)
+			fmt.Println("rebuilding index for:", key, v)
+			if err := builIndexForFile(key, v); err != nil {
+				log.Fatal(err)
+			}
+		})
+		return
+	}
+
+	if *rmFlag {
+		loopArgs("-rm", func(v string) {
+			key := filepath.Base(v)
+			fmt.Println("remove file: ", key)
+			if err := removeFileAndIndex(key); err != nil {
+				log.Fatal(err)
+			}
+		})
+		return
 	}
 
 	// create http server
