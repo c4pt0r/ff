@@ -45,7 +45,7 @@ var listHtmlTpl = `
 <html>
 	<head>
 		<meta charset="UTF-8">
-		<link rel="stylesheet" href="https://unpkg.com/spectre.css/dist/spectre.min.css">
+		<link rel="stylesheet" href="//cdn.rawgit.com/milligram/milligram/master/dist/milligram.min.css">
 	</head>
 	<body>
 		<div class="container">
