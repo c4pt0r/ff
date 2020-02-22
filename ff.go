@@ -112,7 +112,9 @@ func bootstrap(dir string) error {
 	if err != nil {
 		return err
 	}
-	db.CreateTable(&FileMeta{})
+	if !db.HasTable("file_meta") {
+		db.CreateTable(&FileMeta{})
+	}
 	return nil
 }
 
@@ -336,10 +338,11 @@ func main() {
 	flag.Parse()
 	log.SetLevelByString(*logLevel)
 
-	// check workingDir is valid
-	if len(*workingDir) == 0 {
-		log.Fatal("invalid working dir")
-	}
+	// default flag has been set as '.', this error will never occur
+	// if len(*workingDir) == 0 {
+	// 	log.Fatal("invalid working dir")
+	// }
+
 	if stat, err := os.Stat(*workingDir); err != nil || !stat.Mode().IsDir() {
 		if err != nil {
 			log.Fatal(err)
