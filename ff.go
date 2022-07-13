@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,34 +23,17 @@ import (
 	"github.com/ngaut/log"
 )
 
-var (
-	buildIndexFlag = flag.Bool("build-index", false, "rebuild index for local file(s)")
-	rmFlag         = flag.Bool("rm", false, "remove specified file and index")
-	workingDir     = flag.String("dir", ".", "file dir")
-	addr           = flag.String("addr", "0.0.0.0:8080", "listen addr")
-	logLevel       = flag.String("L", "error", "log level")
-)
-
-var (
-	db *gorm.DB
-)
-
-var (
-	ErrNoSuchFile        = errors.New("no such file")
-	ErrFileAlreadyExists = errors.New("file alread exists")
-	ErrDBError           = errors.New("DB Error")
-)
-
 var listHtmlTpl = `
 <!DOCTYPE html>
 <html>
 	<head>
 		<meta charset="UTF-8">
-		<link rel="stylesheet" href="//cdn.rawgit.com/milligram/milligram/master/dist/milligram.min.css">
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack@0.8.1/dist/hack.css">
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack@0.8.1/dist/dark.css">
 	</head>
-	<body>
+	<body class="hack dark">
 		<div class="container">
-			<h1> Files </h1>
+			<p><b>ff - a dead simple file server, just works</b></p>
 			<table>
 			  <thead>
 				<tr>
@@ -58,7 +42,6 @@ var listHtmlTpl = `
 				  <th>Create at</th>
 				  <th>Last access</th>
 				  <th>Download count</th>
-				  <th></th>
 				</tr>
 			  </thead>
 			  <tbody>
@@ -69,7 +52,6 @@ var listHtmlTpl = `
 				  <td>{{ .CreateAt.Format "2006-01-02 15:04:05" }}</td>
 				  <td>{{ .LastAccess.Format "2006-01-02 15:04:05" }}</td>
 				  <td>{{ .DownloadCnt }}</td>
-				  <td><button class="button button-outline">Delete</button></td>
 				</tr>
 				{{end}}
 			  </tbody>
@@ -79,7 +61,51 @@ var listHtmlTpl = `
 </html>
 `
 
-// File Meta
+var (
+	buildIndexFlag = flag.Bool("build-index", false, "rebuild index for local file(s), usage: ./ff -build-index file1 file2 file3 ")
+	rmFlag         = flag.Bool("rm", false, "remove specified file and index")
+	workingDir     = flag.String("dir", ".", "file dir")
+	addr           = flag.String("addr", "0.0.0.0:8080", "listen addr")
+	logLevel       = flag.String("L", "info", "log level")
+	token          = flag.String("token", "", "token for uploading/deleting file")
+	isChroot       = flag.Bool("chroot", true, "chroot")
+)
+
+var (
+	// db is the database connection
+	db *gorm.DB
+)
+
+var (
+	mimeWhiteList = map[string]string{
+		".go":   "text/plain",
+		".js":   "application/javascript",
+		".c":    "text/plain",
+		".h":    "text/plain",
+		".cpp":  "text/plain",
+		".hpp":  "text/plain",
+		".cc":   "text/plain",
+		".hh":   "text/plain",
+		".java": "text/plain",
+		".py":   "text/plain",
+		".rb":   "text/plain",
+		".sh":   "text/plain",
+		".pl":   "text/plain",
+		".php":  "text/plain",
+		".html": "text/html",
+		".css":  "text/css",
+		".ts":   "text/plain",
+		".txt":  "text/plain",
+	}
+)
+
+var (
+	ErrNoSuchFile        = errors.New("no such file")
+	ErrFileAlreadyExists = errors.New("file alread exists")
+	ErrDBError           = errors.New("DB Error")
+)
+
+// FileMeta is the meta of file, it's used to store in DB(sqlite)
 type FileMeta struct {
 	gorm.Model
 	Key         string `gorm:"unique_index"`
@@ -106,13 +132,18 @@ func randString(n int) string {
 // open DB
 // TODO use another type of database
 func bootstrap(dir string) error {
-	log.Info("bootstraping")
+	log.Info("bootstraping...")
 	var err error
 	db, err = gorm.Open("sqlite3", path.Join(dir, ".ff.db"))
 	if err != nil {
 		return err
 	}
-	db.CreateTable(&FileMeta{})
+	// is a new db
+	if !db.HasTable(&FileMeta{}) {
+		log.Info("create table: FileMeta")
+		db.CreateTable(&FileMeta{})
+	}
+	log.Info("bootstrap done")
 	return nil
 }
 
@@ -215,15 +246,17 @@ func doList(w http.ResponseWriter, r *http.Request) {
 	}
 	t.Execute(w, files)
 }
-
 func doGet(w http.ResponseWriter, r *http.Request, key string) {
 	if len(key) == 0 {
+		log.Info(r.RemoteAddr, "show index page")
 		doList(w, r)
 		return
 	} else if meta, ok := getFileMeta(key); ok {
+		log.Info(r.RemoteAddr, "get file:", key)
 		// GET /f/{key}
 		// set content-length
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", meta.Size))
+		// set content-type
 		fn := path.Join(*workingDir, meta.Key)
 		// read file
 		fp, err := os.Open(fn)
@@ -232,6 +265,18 @@ func doGet(w http.ResponseWriter, r *http.Request, key string) {
 			return
 		}
 		defer fp.Close()
+		forceMime := r.FormValue("mime")
+		if len(forceMime) > 0 {
+			w.Header().Set("Content-Type", forceMime)
+		} else {
+			ext := path.Ext(meta.FileName)
+			if tp, ok := mimeWhiteList[ext]; ok {
+				w.Header().Set("Content-Type", tp)
+			} else {
+				w.Header().Set("Content-Type", mime.TypeByExtension(ext))
+			}
+		}
+		// write file
 		_, err = io.Copy(w, fp)
 		if err != nil {
 			errResponse(w, err)
@@ -246,7 +291,8 @@ func doGet(w http.ResponseWriter, r *http.Request, key string) {
 	}
 }
 
-func doDelete(w http.ResponseWriter, key string) {
+func doDelete(w http.ResponseWriter, r *http.Request, key string) {
+	log.Info(r.RemoteAddr, "delete file:", key)
 	if !fileMetaExists(key) {
 		errResponse(w, ErrNoSuchFile)
 		return
@@ -262,6 +308,7 @@ func doDelete(w http.ResponseWriter, key string) {
 func doPut(w http.ResponseWriter, r *http.Request, key string) {
 	// check if file already exists
 	// TODO let 'force' became a flag.
+	log.Info(r.RemoteAddr, "put file:", key)
 	force := true
 	if fileMetaExists(key) && !force {
 		errResponse(w, ErrFileAlreadyExists)
@@ -290,6 +337,18 @@ func doPut(w http.ResponseWriter, r *http.Request, key string) {
 	w.Write([]byte("/f/" + key))
 }
 
+func checkAuthToken(w http.ResponseWriter, r *http.Request) bool {
+	authHdr := r.Header.Get("Authorization")
+	if len(authHdr) == 0 {
+		return false
+	}
+	authHdr = strings.TrimPrefix(authHdr, "Bearer ")
+	if authHdr != *token {
+		return false
+	}
+	return true
+}
+
 func fileHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	key := vars["key"]
@@ -298,10 +357,18 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		doGet(w, r, key)
 	case "DELETE":
-		doDelete(w, key)
+		if len(*token) > 0 && !checkAuthToken(w, r) {
+			w.WriteHeader(401)
+			return
+		}
+		doDelete(w, r, key)
 	case "POST":
 		fallthrough
 	case "PUT":
+		if len(*token) > 0 && !checkAuthToken(w, r) {
+			w.WriteHeader(401)
+			return
+		}
 		doPut(w, r, genKey(key))
 	default:
 		w.WriteHeader(500)
@@ -314,6 +381,7 @@ func serve(addr string) error {
 	r := mux.NewRouter()
 	r.HandleFunc("/f", fileHandler)
 	r.HandleFunc("/f/{key}", fileHandler)
+	log.Info("listening on", addr)
 	return http.ListenAndServe(addr, r)
 }
 
@@ -329,7 +397,6 @@ func loopArgs(flg string, fn func(v string)) {
 			fn(v)
 		}
 	}
-
 }
 
 func main() {
@@ -340,6 +407,7 @@ func main() {
 	if len(*workingDir) == 0 {
 		log.Fatal("invalid working dir")
 	}
+
 	if stat, err := os.Stat(*workingDir); err != nil || !stat.Mode().IsDir() {
 		if err != nil {
 			log.Fatal(err)
@@ -347,6 +415,16 @@ func main() {
 			log.Fatal("invalid working dir")
 		}
 	}
+
+	// chroot for security
+	if *isChroot {
+		if err := os.Chdir(*workingDir); err != nil {
+			log.Fatal(err)
+		}
+		log.Info("chroot to", *workingDir)
+		*workingDir = "."
+	}
+
 	// bootstrap
 	if err := bootstrap(*workingDir); err != nil {
 		log.Fatal(err)
@@ -375,7 +453,6 @@ func main() {
 		})
 		return
 	}
-
 	// create http server
 	if err := serve(*addr); err != nil {
 		log.Fatal(err)

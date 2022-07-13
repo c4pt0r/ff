@@ -16,4 +16,7 @@ $ curl -X PUT --data-binary "@test" http://localhost:8080/f
 
 $ curl http://localhost:8080/f/frcti
 hello world
+
+$ curl -X DELETE http://localhost:8080/f/frcti
+OK
 ```
