@@ -1,6 +1,6 @@
 # ff
 
-a http file server that is suckless (it just works)  
+a dead simple http file server, just works
 
 #### Install:
 `go install github.com/c4pt0r/ff@latest`
