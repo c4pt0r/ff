@@ -62,7 +62,7 @@ var listHtmlTpl = `
 `
 
 var (
-	buildIndexFlag = flag.Bool("build-index", false, "rebuild index for local file(s), usage: ./ff -build-index file1 file2 file3 ")
+	buildIndexFlag = flag.Bool("build-index", false, "rebuild index for local file(s), usage: ./ff -build-index file1 file2 file3 ...")
 	rmFlag         = flag.Bool("rm", false, "remove specified file and index")
 	workingDir     = flag.String("dir", ".", "file dir")
 	addr           = flag.String("addr", "0.0.0.0:8080", "listen addr")
