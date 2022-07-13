@@ -33,7 +33,7 @@ var listHtmlTpl = `
 	</head>
 	<body class="hack dark">
 		<div class="container">
-			<p><b>ff - a dead simple file server, just works</b></p>
+			<p><b>ff - a dead simple file server, just works | Usage: <a href="https://github.com/c4pt0r/ff">github.com/c4pt0r/ff</a></b></p>
 			<table>
 			  <thead>
 				<tr>
