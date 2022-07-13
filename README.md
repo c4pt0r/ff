@@ -1,14 +1,15 @@
 # ff
-Tiny HTTP file-sharing tool
 
-####Install:
-`go get github.com/c4pt0r/ff`
+a http file server that is suckless (it just works)  
 
-####Usage:
+#### Install:
+`go install github.com/c4pt0r/ff@latest`
+
+#### Usage:
 
 `ff -dir /path/to/working/dir -addr :8080`
 
-####Example:
+#### Example:
 
 ```
 $ curl -X PUT --data-binary "@test" http://localhost:8080/f
