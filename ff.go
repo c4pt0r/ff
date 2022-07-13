@@ -379,6 +379,9 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 // http file server
 func serve(addr string) error {
 	r := mux.NewRouter()
+	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/f", http.StatusMovedPermanently)
+	})
 	r.HandleFunc("/f", fileHandler)
 	r.HandleFunc("/f/{key}", fileHandler)
 	log.Info("listening on", addr)
