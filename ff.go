@@ -33,7 +33,15 @@ var listHtmlTpl = `
 	</head>
 	<body class="hack dark">
 		<div class="container">
-			<p><b>ff - a dead simple file server, just works | Usage: <a href="https://github.com/c4pt0r/ff">github.com/c4pt0r/ff</a></b></p>
+			<p>
+				<b>ff - a dead simple file server, just works | Usage: <a href="https://github.com/c4pt0r/ff">github.com/c4pt0r/ff</a></b>
+				<form class="form" action="/f" method="GET">
+				<fieldset class="form-group">
+					<input id="search" type="text" placeholder="keyword" class="form-control" name="q">
+				</fieldset>
+				</form>
+			</p>
+
 			<table>
 			  <thead>
 				<tr>
@@ -226,6 +234,7 @@ func getFileMeta(key string) (*FileMeta, bool) {
 func doList(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	var files []FileMeta
+	var pattern string
 	var err error
 	offset, limit := 0, 50
 	if v := r.FormValue("offset"); len(v) > 0 {
@@ -234,18 +243,28 @@ func doList(w http.ResponseWriter, r *http.Request) {
 	if v := r.FormValue("n"); len(v) > 0 {
 		limit, err = strconv.Atoi(v)
 	}
+
+	if v := r.FormValue("q"); len(v) > 0 {
+		pattern = v
+	}
+
 	if err != nil {
 		errResponse(w, err)
 		return
 	}
-	// get file metas
-	db.Order("create_at DESC").Offset(offset).Limit(limit).Find(&files)
+	if pattern != "" {
+		db.Where("key LIKE ?", "%"+pattern+"%").Order("create_at DESC").Offset(offset).Limit(limit).Find(&files)
+	} else {
+		// get file metas
+		db.Order("create_at DESC").Offset(offset).Limit(limit).Find(&files)
+	}
 	t, err := template.New("listPage").Parse(listHtmlTpl)
 	if err != nil {
 		log.Fatal(err)
 	}
 	t.Execute(w, files)
 }
+
 func doGet(w http.ResponseWriter, r *http.Request, key string) {
 	if len(key) == 0 {
 		log.Info(r.RemoteAddr, "show index page")
