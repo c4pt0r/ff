@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -77,6 +79,7 @@ var (
 	logLevel       = flag.String("L", "info", "log level")
 	token          = flag.String("token", "", "token for uploading/deleting file")
 	isChroot       = flag.Bool("chroot", true, "chroot")
+	httpBasicAuth  = os.Getenv("FF_HTTP_BASIC_AUTH")
 )
 
 var (
@@ -356,19 +359,53 @@ func doPut(w http.ResponseWriter, r *http.Request, key string) {
 	w.Write([]byte("/f/" + key))
 }
 
-func checkAuthToken(w http.ResponseWriter, r *http.Request) bool {
+func checkAuthToken(r *http.Request) bool {
+	if *token == "" {
+		return true
+	}
 	authHdr := r.Header.Get("Authorization")
 	if len(authHdr) == 0 {
 		return false
 	}
 	authHdr = strings.TrimPrefix(authHdr, "Bearer ")
-	if authHdr != *token {
+	return subtle.ConstantTimeCompare([]byte(authHdr), []byte(*token)) == 1
+}
+
+func checkBasicAuth(r *http.Request) bool {
+	if httpBasicAuth == "" {
+		return true
+	}
+
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
 		return false
 	}
-	return true
+
+	const prefix = "Basic "
+	if !strings.HasPrefix(auth, prefix) {
+		return false
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
+	if err != nil {
+		return false
+	}
+
+	pair := strings.SplitN(string(payload), ":", 2)
+	if len(pair) != 2 {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(pair[0]+":"+pair[1]), []byte(httpBasicAuth)) == 1
 }
 
 func fileHandler(w http.ResponseWriter, r *http.Request) {
+	if !checkBasicAuth(r) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	vars := mux.Vars(r)
 	key := vars["key"]
 
@@ -376,22 +413,22 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		doGet(w, r, key)
 	case "DELETE":
-		if len(*token) > 0 && !checkAuthToken(w, r) {
-			w.WriteHeader(401)
+		if !checkAuthToken(r) {
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		doDelete(w, r, key)
 	case "POST":
 		fallthrough
 	case "PUT":
-		if len(*token) > 0 && !checkAuthToken(w, r) {
-			w.WriteHeader(401)
+		if !checkAuthToken(r) {
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		doPut(w, r, genKey(key))
 	default:
-		w.WriteHeader(500)
-		w.Write([]byte("invalid request"))
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		w.Write([]byte("Method not allowed"))
 	}
 }
 
@@ -399,6 +436,11 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 func serve(addr string) error {
 	r := mux.NewRouter()
 	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !checkBasicAuth(r) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		http.Redirect(w, r, "/f", http.StatusMovedPermanently)
 	})
 	r.HandleFunc("/f", fileHandler)
